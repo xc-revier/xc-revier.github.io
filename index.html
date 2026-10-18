@@ -335,7 +335,7 @@ svg.leaflet-zoom-animated{will-change:transform}
 
 <header>
   <h1>XC Revier <small>Fläche erfliegen, halten, verlieren</small></h1>
-  <div class="hdr-r"><select id="langSel" class="datebtn langsel" title="Sprache / Language / Idioma"><option value="de">DE</option><option value="en">EN</option><option value="es">ES</option></select><select id="seasonSel" class="datebtn seasonsel" title="Saison (1.10. bis 30.9.)"></select><select id="clubSel" class="datebtn clubsel" title="Club wählen"></select><button type="button" class="btn hbtn" id="introBtn" title="Intro-Video">▶ <span class="hl-txt">Intro</span></button><button type="button" class="btn hbtn" id="newsBtn" title="Was ist neu">🆕 <span class="hl-txt">Was ist neu</span></button><button type="button" class="btn hbtn" id="msgBtn" title="Kontakt">✉ <span class="hl-txt">Kontakt</span><span class="badge" id="msgBadge" hidden></span></button><span class="lbl" id="version">v85 (06.10. 19:06)</span></div>
+  <div class="hdr-r"><select id="langSel" class="datebtn langsel" title="Sprache / Language / Idioma"><option value="de">DE</option><option value="en">EN</option><option value="es">ES</option></select><select id="seasonSel" class="datebtn seasonsel" title="Saison (1.10. bis 30.9.)"></select><select id="clubSel" class="datebtn clubsel" title="Club wählen"></select><button type="button" class="btn hbtn" id="introBtn" title="Intro-Video">▶ <span class="hl-txt">Intro</span></button><button type="button" class="btn hbtn" id="newsBtn" title="Was ist neu">🆕 <span class="hl-txt">Was ist neu</span></button><button type="button" class="btn hbtn" id="msgBtn" title="Kontakt">✉ <span class="hl-txt">Kontakt</span><span class="badge" id="msgBadge" hidden></span></button><span class="lbl" id="version">v86 (18.10. 19:10)</span></div>
   <button type="button" class="mgear" id="mGear" aria-label="Hochladen und Einstellungen">⚙</button>
 </header>
 <div class="modal" id="modal" hidden><div class="modal-bg" id="modalBg"></div><div class="modal-box"><div class="modal-hd"><h2 id="modalTitle"></h2><button type="button" class="btn" id="modalClose">✕</button></div><div class="modal-body" id="modalBody"></div></div></div>
@@ -1908,6 +1908,12 @@ svg.leaflet-zoom-animated{will-change:transform}
   }
 
   function simp(g){ if(!g) return g; try{ return turf.simplify(g,{tolerance:0.00005,highQuality:false,mutate:false}); }catch(e){ return g; } }
+  // Schutz gegen Formen, an denen die Geometrie-Bibliothek hängen bleibt: vor jedem Revier wird gemerkt, woran gerechnet wird.
+  // Bleibt die Seite dort stehen und wird neu geladen, rechnet sie dieses Revier an diesem Tag vereinfacht (ca. 30 m Raster).
+  function rough(g){ if(!g) return g; try{ let r=turf.simplify(g,{tolerance:0.0003,highQuality:false,mutate:false}); r=turf.truncate(r,{precision:5,mutate:true}); try{ r=turf.cleanCoords(r); }catch(e){} return r; }catch(e){ return g; } }
+  const STUCK_KEY='xc-stuck', MARK_KEY='xc-calc-mark';
+  function loadStuck(){ let st=[]; try{ st=JSON.parse(localStorage.getItem(STUCK_KEY)||'[]'); const m=JSON.parse(localStorage.getItem(MARK_KEY)||'null'); if(m&&m.pilot&&!st.some(x=>x.club===m.club&&x.season===m.season&&x.date===m.date&&x.pilot===m.pilot)){ st.push(m); localStorage.setItem(STUCK_KEY,JSON.stringify(st)); } localStorage.removeItem(MARK_KEY); }catch(e){} return st; }
+  function markCalc(o){ try{ if(o) localStorage.setItem(MARK_KEY,JSON.stringify(o)); else localStorage.removeItem(MARK_KEY); }catch(e){} }
   function xcScore(coords){
     let pts=coords; let tol=0.0005;
     while(pts.length>140&&tol<0.02){ try{ pts=turf.simplify(turf.lineString(coords),{tolerance:tol,highQuality:false}).geometry.coordinates; }catch(e){ break; } tol*=1.6; }
@@ -2091,6 +2097,7 @@ svg.leaflet-zoom-animated{will-change:transform}
   }
   async function compute(tok){
     const corrKm=state.corridor/1000; const sig0=inputSig();
+    const stuck=loadStuck().filter(x=>x.club===state.club&&x.season===state.season); const isStuck=(d,p)=>stuck.some(x=>x.date===d&&x.pilot===p); const roughUsed=[];
     try{ await fetchTemps(state.flights.filter(f=>!validate(f)),tok); }catch(e){}
     try{ await fetchPlaces(state.flights.filter(f=>!validate(f)),tok); }catch(e){}
     if(tok!==calcTok) return false;
@@ -2168,6 +2175,8 @@ svg.leaflet-zoom-animated{will-change:transform}
         const othersOf=othersUnions(terr,pilots);
         let pi=0;
         for(const p of pilots){
+          markCalc({club:state.club,season:state.season,date:ds,pilot:p});
+          if(isStuck(ds,p)){ terr[p]=rough(terr[p]); othersOf[p]=rough(othersOf[p]); if(pieces[p]) pieces[p].forEach(pc=>pc.geom=rough(pc.geom)); if(oldRef[p]) oldRef[p]=rough(oldRef[p]); roughUsed.push(p+' am '+ds.split('-').reverse().join('.')); }
           pi++; if(pi%5===0){ $('#areaLbl').textContent='Berechne '+ds.split('-').reverse().join('.')+' ('+di+' von '+nFD+'), Reviere '+pi+' von '+pilots.length+' …'; if(busyOn) busy('Berechne Flugtag '+di+' von '+nFD+', Reviere '+pi+' von '+pilots.length,0.2+0.8*((di-1)+0.5+pi/pilots.length/2)/nFD); await new Promise(r=>setTimeout(r,0)); if(tok!==calcTok) return false; }
           const total=areaKm2(terr[p]);
           const others=othersOf[p];
@@ -2204,7 +2213,9 @@ svg.leaflet-zoom-animated{will-change:transform}
       d.setUTCDate(d.getUTCDate()+1);
     }
     invalid.forEach(f=>events.push({f,invalid:validate(f),shape:'ungültig',area:0,inc:0,overlapOwn:0,captured:0,len:0,excl:0,shared:0,base:0,bonus:0,bonusTxt:[],dayTotal:null,flightsToday:0}));
+    markCalc(null);
     if(tok!==calcTok) return false;
+    if(roughUsed.length){ try{ $('#hint').textContent+=' Vereinfacht gerechnet (Form war zu verwinkelt): '+roughUsed.join(', ')+'.'; }catch(e){} }
     state.result={terr,events,snaps,fl,sig:sig0,fresh:true};
     if(cpDate){ const evCp=events.filter(e=>!e.invalid&&e.f.date<=cpDate).map(e=>{ const o={...e}; o.k=fkey(e.f); delete o.f; return o; });
       checkpoint={rules:RULES_VERSION,club:state.club,season:state.season,fdmin:FLIGHTDAY_MIN,date:cpDate,fl:fl.filter(f=>f.date<=cpDate).map(fkey),terr,dayUnions,mineEver,exclHist,last,flightDays,lastFlew,pieces,events:evCp,snaps:snaps.filter(sn=>sn.date<=cpDate)}; }
@@ -2315,6 +2326,7 @@ svg.leaflet-zoom-animated{will-change:transform}
     render(); loadLog(); refreshAdminUI(); }
 
   const CHANGELOG=[
+    {v:'86',d:'18.10.2026',t:['Schutz gegen Hänger beim Rechnen: Bleibt die Seite bei einem Revier stehen, wird es nach dem Neuladen vereinfacht gerechnet und unten genannt']},
     {v:'85',d:'06.10.2026',t:['Beim Speichern eines Ergebnisses steht jetzt der genaue Grund der Datenbank dabei (zu groß, zu oft, Code)']},
     {v:'84',d:'06.10.2026',t:['Neuer Knopf ▶ Intro oben: 23-Sekunden-Video, was das Spiel ist','Karte: Startausschnitt zeigt das Hauptrevier groß (alles im Umkreis von 50 km um die Mitte der Reviere). Urlaubsflüge in Spanien oder Italien bleiben auf der Karte, ziehen den Ausschnitt aber nicht mehr auf halb Europa auf']},
     {v:'83',d:'04.10.2026',t:['Schmale Fenster (unter 1400 Pixel, z. B. halber Monitor): Regeln rutschen unter die Karte, Karte und Flugliste bekommen mehr Platz','XContest-Skript 1.3: liest die nachgeladene Flugliste zuverlässig, erkennt von Hand geladene Flüge auch bei frühem Aufzeichnungsbeginn']},
